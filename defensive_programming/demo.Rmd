@@ -1,0 +1,401 @@
+---
+title: "Defensive programming in R"
+output:
+  prettydoc::html_pretty:
+    theme: leonids
+---
+
+## ... anticipating and avoiding problems before they occur
+The goal is not to write code that is flawless, but to write code that fails well!
+
+1. __Fail fast__
+2. __Fail safe__
+3. __Fail conspicuously__
+4. __Fail appropriately__
+5. __Fail creatively__
+
+## Documentation
+* Document every meaningful code step!
+* Use a few sentences at the top of a program to document:
+  - the purpose of the file
+  - who wrote it
+  - the date/when it was last updated
+  - the inputs and outputs of the file
+* List packages at the start of a program with `library()`
+```{r, include = F}
+library(tidyverse)
+library(ggplot2)
+```
+
+```
+library(tidyverse)
+library(ggplot2)
+```
+* Don't hard-code file-paths! Store important variables (like paths to the root directory) at the top of the program or use relative file paths.
+* Use `#` or `#-` to isolate/distinguish different sections of code.
+* Document functions
+  - From the [Tidyverse styleguide](https://style.tidyverse.org/documentation.html), you should: "use the first line of your function documentation to provide a concise title that describes the function, dataset, or class. Titles should use sentence case but not end with a full stop `(.)`."
+  - Use @title or @description tags if the documentation is multiple paragraphs or includes complex formatting (like a bulletted list).
+  - For writing R packages, you can use `roxygen2`
+* Group functions together (in a separate file or at the top of your code) using `source()`
+
+## Short functions
+* Functions should be less than 60 lines of code (or what can be printed on a single page)
+
+## Modular code
+* Break things up into smaller chunks
+* Automate when necessary
+* Excel files
+
+## Version control
+* `packrat`
+* `renv`
+  - `renv::init()` creates an renv lockfile and a project-specific environment (with libraries specific to your project)
+  - `renv::snapshot()` writes the current packages and versions to an renv lockfile
+  - `renv::restore()` reverts to the state of packages and versions as stored in the lockfile
+
+## Consistent style (with automation)
+* `lintr`
+* `styler`: run commands from the Addins button
+  - `styler::style_text()` styles a character vector
+  - `styler::style_selection()` styles selected text
+  - `styler::style_file()` styles R and Rmd files
+  - `styler::style_dir()` styles all the R and Rmd files in a directory
+  - `styler::style_pkg()` styles the files that go into making a package
+
+## Consistent strategies for naming
+* variables
+* files
+  - being consistent about `_` or `.` values when naming
+  - now spaces or strange characters
+  - camel case (e.g., `toString`) vs. snake case (e.g., `this_is_snake_case`)
+  - Note: capitalization in R doesn't usually have any special meaning!
+
+## End with a clean run
+* Through knitting the file or starting with a clean environment.
+
+## Assert--even when you believe something to be true
+
+E.g., R treats missing values differently depending on the operator
+
+```{r}
+l <- c(0:3, NA_real_, 10, 1)
+
+# we want all >= 3
+# the missing value is included, indexed as NA
+l[l >= 3]
+l >= 3
+
+# but what about
+l[l %in% c(3:10)]
+l %in% c(3:10)
+
+# make sure you know exactly what's happening, whenever you perform an operation/create a new variable!
+```
+
+* `stopifnot()` works like an assert in Python
+```{r}
+stopifnot((10 > 3))
+
+# I frequently use it for identifying uniqueness in datasets
+cars
+eeptools::isid(cars, c("speed", "dist"))
+
+stopifnot(eeptools::isid(cars %>%
+  unique(), c("speed", "dist")))
+```
+* `trycatch`
+```{r}
+# trying to read a url
+urls <- c(
+    "https://data.cityofnewyork.us/resource/erm2-nwe9.csv",
+    "https://data.cityofnewyork.us/resource/4f23-ddz6.csv",
+    "xxxxx"
+)
+
+#     
+
+readopendata <- function(url) {
+    out <- tryCatch(
+        {
+          message("This is the 'try' part")
+            
+            # the function will attempt this
+            # no need to include a return value
+            read_csv(url)
+        },
+        error=function(cond) {
+            message(paste("URL does not seem to exist:", url))
+            message("Here's the original error message:")
+            message(cond)
+            # Choose a return value in case of error
+            return(NA)
+        },
+        warning=function(cond) {
+            message(paste("URL caused a warning:", url))
+            message("Here's the original warning message:")
+            message(cond)
+            # choose a return value in case of warning
+            return(NULL)
+        },
+        finally={
+          # this part is executed regardless of whether the try
+          # part was successful or failed
+            message(paste("Processed URL:", url))
+            message("Some other message at the end")
+        }
+    )    
+    return(out)
+}
+
+dfs <- map(urls, ~readopendata(.))
+dfs
+```
+* `assertr` (there's also the `assertthat` package by Hadley Wickham, which I haven't used)
+  -`verify` statements: take as the arguments a dataframe and a logical boolean operation
+```{r}
+df <- dfs[[1]]
+df
+
+df %>%
+  head() %>%
+  mutate(agency_name = if_else(row_number() == 3, "X", agency_name)) %>%
+  assertr::verify(agency_name == "New York City Police Department")
+
+df %>% 
+  head() %>%
+  assertr::verify(agency_name == "New York City Police Department")
+```
+    * you can also use verify statements to check aspects of the dataset as a whole
+```{r}
+df %>% 
+  head() %>% 
+  assertr::verify(nrow(.) == 6)
+
+df %>% 
+  mutate(ind1 = if_else(row_number() < (nrow(.)/2), 1, 0),
+         ind2 = if_else(row_number() < (nrow(.)/2), 0, 1)) %>% 
+  assertr::verify(ind1 + ind2 == 1)
+```
+  - `assert` statements: take as the arguments a dataframe, a predicate, and a set of columns to apply the condition to
+```{r}
+df %>% 
+  head() %>% 
+  # selecting columns using the same syntax as a dplyr select statement
+  assertr::assert(assertr::in_set("New York City Police Department"), agency_name)
+```
+  - There are several types of predicates:
+    * `not_na()`
+    * `within_bounds()`
+    * `in_set()`
+    * `is_uniq()`
+```{r}
+df %>% 
+  assertr::assert(assertr::is_uniq, unique_key)
+
+df %>% 
+  assertr::assert(assertr::within_bounds(40, 50), latitude)
+```
+  - there are custom predicates
+```{r}
+agency_nypd <- function(x) if (x=="NYPD") return(TRUE)
+df %>% 
+  assertr::assert(agency_nypd, agency)
+```
+  - `insist`
+```{r}
+# primary use case is to check within X standard deviations
+# this is a good function to use to check for the presence of outliers
+mtcars %>%
+  assertr::insist(assertr::within_n_sds(3), mpg) %>%
+  group_by(cyl) %>%
+  summarise(avg.mpg=mean(mpg))
+
+mtcars %>%
+  assertr::insist(assertr::within_n_sds(2), mpg:carb) %>%
+  group_by(cyl) %>%
+  summarise(avg.mpg=mean(mpg))
+
+# there's also within_n_mads(), which uses the number of median absolute deviations
+mtcars %>% 
+  assertr::insist(assertr::within_n_mads(3), mpg)
+```
+  - row-oriented assertions
+```{r}
+mtcars %>% 
+  # note: this calculates the mahalanobis distance 
+  # will return a vector, with the same length as the number of rows of the provided data frame, corresponding to the average mahalanobis distances of each row from the whole data set
+  assertr::insist_rows(assertr::maha_dist, assertr::within_n_mads(4), everything())
+
+df %>% 
+  #  number of missing values in each row
+  assertr::assert_rows(assertr::num_row_NAs, assertr::within_bounds(0, 500), everything())
+
+df %>% 
+  # will return a vector, with the same length as the number
+  # of rows of the provided data frame. Each element of the vector will be
+  # it's corresponding row with all of its values (one for each column)
+  # "pasted" together in a string.
+  assertr::assert_rows(assertr::col_concat, assertr::is_uniq, unique_key)
+```
+
+  - Like `tryCatch()` you can configure different parameters: `success_fun`, `error_fun`, and `defect_fun`
+  - Chaining assertions
+```{r}
+df %>% 
+  # you can use chain_start and end!
+  # to give you a full report at the end
+  assertr::chain_start() %>% 
+  assertr::verify(nrow(.) > 500) %>% 
+  assertr::assert_rows(assertr::col_concat, assertr::is_uniq, agency) %>%
+  assertr::assert(assertr::in_set("NYPD"), agency) %>%
+  assertr::chain_end() %>% 
+  group_by(agency) %>% 
+  summarize(agency_first = first(agency))
+```
+
+- a helpful function I wrote for error checking
+```{r}
+# checks uniqueness, can be used in a pipe
+verify_isid <- function(df, vars) {
+  df %>%
+    eeptools::isid(vars) %>%
+    stopifnot()
+  
+  return(df)
+}
+
+df %>% 
+  verify_isid("unique_key")
+```
+
+## Tab and cross-tab
+* New variables
+```{r}
+# tablist, prints to console
+tablist_qc <- function(x, ...) {
+  x %>%
+    group_by(...) %>%
+    summarize(`_freq` = n()) %>%
+    as.data.frame() %>%
+    # calculate percent
+    mutate(`_perc` = round(100 * (`_freq` / nrow(x)), digits = 1)) %>%
+    # order by values
+    arrange(...) %>%
+    as.data.frame() %>%
+    pander::pandoc.table(split.tables = Inf, multi.line = TRUE)
+}
+
+df %>% 
+  mutate(nypd = if_else(agency == "NYPD", 1, 0)) %>% 
+  tablist_qc(nypd, agency, agency_name)
+```
+* Merge rates
+```{r}
+`%notin%` <- Negate(`%in%`)
+
+# produce merge with statistics
+# mirrors behavior of merge in stata
+merge_qc <- function(df) {
+  df %>%
+    mutate(merge = case_when(merge.x == 1 & merge.y == 1 ~ 3,
+                             merge.x == 1 & is.na(merge.y) ~ 1,
+                             is.na(merge.x) & merge.y == 1 ~ 2)) %>%
+    select(-c("merge.x", "merge.y"))
+}
+
+# option verify, checks that merge is inline with the values supplied
+# e.g. verify = C(2,3) checks that the merge is only right data and merge data
+# 1 = left file only, 2 = right file only, 3 = merged
+# tab prints merge statistics
+
+full_join_qc <- function(x, y, by = NULL, tab = F, verify = NULL, drop_ind = F, ...) {
+  df <- full_join(mutate(x, merge = 1), mutate(y, merge = 1), by = by, ...) %>%
+    merge_qc()
+  
+  if (tab == T) {
+    df %>%
+      tablist_qc(merge)
+  }
+  
+  if (!is.null(verify)) {
+    if (all(is.character(verify))) {
+      warning('verify must be numeric')
+    } else if (all(verify %notin% c(1, 2, 3))) {
+      warning('verify uses stata syntax: 1 = left, 2 = right, 3 = merged')
+    }
+    
+    stopifnot(setequal(unique(df$merge), verify))
+  }
+  
+  if (drop_ind == T) {
+    df <- df %>% 
+      select(-"merge")
+  }
+  return(df)
+}
+
+inner_join_qc <- function(x, y, by = NULL, tab = F, verify = NULL, drop_ind = F, ...) {
+  
+  df <- full_join_qc(x, y, by, tab = tab, verify = verify, ...) %>%
+    filter(merge == 3)
+  
+  return(df)
+}
+
+left_join_qc <- function(x, y, by = NULL, tab = F, verify = NULL, drop_ind = F, ...) {
+  
+  df <- full_join_qc(x, y, by, tab = tab, verify = verify, ...) %>%
+    filter(merge %in% c(1, 3))
+  return(df)
+}
+
+right_join_qc <- function(x, y, by = NULL, tab = F, verify = NULL, drop_ind = F, ...) {
+  
+  df <- full_join_qc(x, y, by, tab = tab, verify = verify, ...) %>%
+    filter(merge %in% c(2, 3))
+  return(df)
+}
+```
+
+```{r}
+xwalk <- df %>% 
+  select(c("agency", "agency_name")) %>% 
+  unique()
+
+
+df %>% 
+  rowwise() %>% 
+  mutate(x = runif(1)) %>% 
+  ungroup() %>% 
+  mutate(unique_key = if_else(x < 0.5, unique_key, as.numeric(str_pad(row_number(), width = 8, pad = "9")))) %>% 
+  select(-"agency_name") %>% 
+  full_join_qc(df %>% 
+                 select(c("unique_key", "agency_name")), by = "unique_key", tab = T, verify = c(1, 2, 3))
+
+df %>% 
+  rowwise() %>% 
+  mutate(x = runif(1)) %>% 
+  ungroup() %>% 
+  mutate(unique_key = if_else(x < 0.5, unique_key, as.numeric(str_pad(row_number(), width = 8, pad = "9")))) %>% 
+  select(-"agency_name") %>% 
+  full_join_qc(xwalk, by = "agency", tab = T, verify = 3)
+```
+## What else?
+* Testing
+  - More oriented to the operation of functions (we have a handful in the different R packages)
+  - Specify test cases and weird edge cases, often using assert (called `testthat`)
+* For the rent survey project, did work verifying the contents of those datasets with specific constraints
+  - Used `pointblank` (has conventions for specifically verifying the way columns are structured)
+* People use diff. syntax for defining file paths (`str_glue`, `fs`, `paste0`, `file.path`)
+  - Probably `fs` package is the one that makes the most sense: makes everything consistent between Mac and Windows
+  - `fs` has a lot of the file system operations that you might want to use
+  - has helpful tab complete
+
+
+
+
+
+
+
+
